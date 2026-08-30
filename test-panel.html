@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>JWT收集技能 - 测试面板</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+            animation: slideDown 0.5s ease-out;
+        }
+
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+
+        .header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            margin-bottom: 20px;
+            overflow: hidden;
+            animation: slideUp 0.5s ease-out;
+        }
+
+        .card-header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            font-size: 1.3em;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .card-content {
+            padding: 20px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+        }
+
+        button {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #e0e0e0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #d0d0d0;
+            transform: translateY(-2px);
+        }
+
+        .btn-success {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #45a049;
+            transform: translateY(-2px);
+        }
+
+        .btn-danger {
+            background: #f44336;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #da190b;
+            transform: translateY(-2px);
+        }
+
+        .btn-warning {
+            background: #ff9800;
+            color: white;
+        }
+
+        .btn-warning:hover {
+            background: #e68900;
+            transform: translateY(-2px);
+        }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .console {
+            background: #1e1e1e;
+            color: #00ff00;
+            padding: 15px;
+            border-radius: 8px;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.9em;
+            line-height: 1.6;
+            max-height: 400px;
+            overflow-y: auto;
+            margin-top: 10px;
+            border: 1px solid #333;
+        }
+
+        .console-line {
+            margin: 4px 0;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+
+        .log-info { color: #00ff00; }
+        .log-success { color: #00ff00; }
+        .log-error { color: #ff4444; }
+        .log-warning { color: #ffff00; }
+        .log-debug { color: #88ccff; }
+
+        .test-result {
+            margin: 15px 0;
+            padding: 15px;
+            border-left: 4px solid #ddd;
+            border-radius: 4px;
+            background: #f9f9f9;
+        }
+
+        .test-result.passed {
+            border-left-color: #4CAF50;
+            background: #f1f8f4;
+        }
+
+        .test-result.failed {
+            border-left-color: #f44336;
+            background: #fef1f0;
+        }
+
+        .test-result-title {
+            font-weight: bold;
+            margin-bottom: 5px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .test-result-message {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 30px;
+            background: #e0e0e0;
+            border-radius: 15px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #45a049);
+            width: 0%;
+            transition: width 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+            font-size: 0.9em;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-card.success {
+            background: linear-gradient(135deg, #84fab0 0%, #8fd3f4 100%);
+        }
+
+        .stat-card.error {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+        }
+
+        .stat-number {
+            font-size: 2em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 5px;
+        }
+
+        .input-group {
+            margin: 15px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .input-group label {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .input-group input,
+        .input-group textarea {
+            padding: 10px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-family: monospace;
+            font-size: 0.9em;
+        }
+
+        .input-group input:focus,
+        .input-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #ddd;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border: none;
+            background: none;
+            font-weight: bold;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s ease;
+            color: #666;
+        }
+
+        .tab.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s ease-out;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin: 10px 0;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border-left: 4px solid #28a745;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border-left: 4px solid #f5c6cb;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border-left: 4px solid #bee5eb;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- 页头 -->
+        <div class="header">
+            <h1>🚀 JWT收集技能测试面板</h1>
+            <p>APP注册后登陆签到的JWT自动收集方案</p>
+        </div>
+
+        <!-- 主测试卡片 -->
+        <div class="card">
+            <div class="card-header">
+                🧪 测试控制台
+            </div>
+            <div class="card-content">
+                <div class="tabs">
+                    <button class="tab active" onclick="switchTab('unit-tests')">
+                        ✓ 单元测试
+                    </button>
+                    <button class="tab" onclick="switchTab('integration-tests')">
+                        🔗 集成测试
+                    </button>
+                    <button class="tab" onclick="switchTab('manual-test')">
+                        ⚙️ 手动测试
+                    </button>
+                </div>
+
+                <!-- 单元测试 -->
+                <div id="unit-tests" class="tab-content active">
+                    <div class="button-group">
+                        <button class="btn-primary" onclick="runUnitTests()">
+                            运行所有单元测试
+                        </button>
+                        <button class="btn-secondary" onclick="clearConsole()">
+                            清空日志
+                        </button>
+                    </div>
+                    <div id="unit-progress" class="progress-bar" style="display: none;">
+                        <div class="progress-fill" id="unit-progress-fill"></div>
+                    </div>
+                    <div id="unit-results"></div>
+                </div>
+
+                <!-- 集成测试 -->
+                <div id="integration-tests" class="tab-content">
+                    <div class="button-group">
+                        <button class="btn-primary" onclick="runIntegrationTests()">
+                            运行所有集成测试
+                        </button>
+                        <button class="btn-secondary" onclick="clearConsole()">
+                            清空日志
+                        </button>
+                    </div>
+                    <div id="integration-progress" class="progress-bar" style="display: none;">
+                        <div class="progress-fill" id="integration-progress-fill"></div>
+                    </div>
+                    <div id="integration-results"></div>
+                </div>
+
+                <!-- 手动测试 -->
+                <div id="manual-test" class="tab-content">
+                    <div class="input-group">
+                        <label>登陆API端点</label>
+                        <input type="text" id="loginUrl" placeholder="例如: https://api.example.com/login" value="/api/login">
+                    </div>
+                    <div class="input-group">
+                        <label>签到API端点</label>
+                        <input type="text" id="signInUrl" placeholder="例如: https://api.example.com/signin" value="/api/signin">
+                    </div>
+                    <div class="input-group">
+                        <label>登陆凭证 (JSON)</label>
+                        <textarea id="credentials" rows="4" placeholder='{"phone": "13800138000", "password": "123456"}'>{"phone": "13800138000", "password": "password"}</textarea>
+                    </div>
+                    <div class="input-group">
+                        <label>Token路径 (使用点号表示法)</label>
+                        <input type="text" id="tokenPath" placeholder="例如: data.token" value="data.token">
+                    </div>
+                    <div class="button-group">
+                        <button class="btn-success" onclick="testManualFlow()">
+                            执行完整流程
+                        </button>
+                        <button class="btn-warning" onclick="testCollectOnly()">
+                            仅收集JWT
+                        </button>
+                        <button class="btn-danger" onclick="clearStoredToken()">
+                            清除Token
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 统计信息 -->
+        <div class="card">
+            <div class="card-header">
+                📊 测试统计
+            </div>
+            <div class="card-content">
+                <div class="stats">
+                    <div class="stat-card">
+                        <div class="stat-number" id="total-tests">0</div>
+                        <div class="stat-label">总测试数</div>
+                    </div>
+                    <div class="stat-card success">
+                        <div class="stat-number" id="passed-tests">0</div>
+                        <div class="stat-label">通过</div>
+                    </div>
+                    <div class="stat-card error">
+                        <div class="stat-number" id="failed-tests">0</div>
+                        <div class="stat-label">失败</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="success-rate">0%</div>
+                        <div class="stat-label">成功率</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 控制台输出 -->
+        <div class="card">
+            <div class="card-header">
+                💻 控制台输出
+            </div>
+            <div class="card-content">
+                <button class="btn-secondary" onclick="clearConsole()" style="margin-bottom: 10px;">
+                    清空所有日志
+                </button>
+                <div id="console" class="console"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ============ 页面管理 ============
+        let consoleLogs = [];
+        let testStats = {
+            total: 0,
+            passed: 0,
+            failed: 0
+        };
+
+        function switchTab(tabName) {
+            // 隐藏所有标签页内容
+            const contents = document.querySelectorAll('.tab-content');
+            contents.forEach(content => content.classList.remove('active'));
+
+            // 取消所有标签页的激活状态
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => tab.classList.remove('active'));
+
+            // 激活选中的标签页
+            document.getElementById(tabName).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        function log(message, type = 'info') {
+            const timestamp = new Date().toLocaleTimeString();
+            const logEntry = `[${timestamp}] ${message}`;
+            consoleLogs.push({ message: logEntry, type });
+            updateConsoleDisplay();
+        }
+
+        function updateConsoleDisplay() {
+            const consoleEl = document.getElementById('console');
+            consoleEl.innerHTML = consoleLogs.map(entry => 
+                `<div class="console-line log-${entry.type}">${entry.message}</div>`
+            ).join('');
+            consoleEl.scrollTop = consoleEl.scrollHeight;
+        }
+
+        function clearConsole() {
+            consoleLogs = [];
+            updateConsoleDisplay();
+        }
+
+        function updateStats() {
+            document.getElementById('total-tests').textContent = testStats.total;
+            document.getElementById('passed-tests').textContent = testStats.passed;
+            document.getElementById('failed-tests').textContent = testStats.failed;
+            
+            const rate = testStats.total > 0 
+                ? ((testStats.passed / testStats.total) * 100).toFixed(2)
+                : '0';
+            document.getElementById('success-rate').textContent = rate + '%';
+        }
+
+        // ============ 单元测试 ============
+        async function runUnitTests() {
+            log('🚀 开始运行单元测试...', 'info');
+            
+            // 检查是否已加载技能
+            if (typeof JWTCollectorSkill === 'undefined') {
+                log('❌ JWTCollectorSkill未加载，请先加载jwt-collector-skill.js', 'error');
+                return;
+            }
+
+            if (typeof JWTCollectorSkillTests === 'undefined') {
+                log('❌ JWTCollectorSkillTests未加载，请先加载jwt-collector-skill.test.js', 'error');
+                return;
+            }
+
+            try {
+                const tester = new JWTCollectorSkillTests();
+                const results = await tester.runAllTests();
+
+                testStats.total += results.totalTests;
+                testStats.passed += results.passedTests;
+                testStats.failed += results.failedTests;
+
+                log('', 'info');
+                log(`✅ 单元测试完成: ${results.passedTests}/${results.totalTests} 通过`, 'success');
+                log(`📈 成功率: ${results.successRate.toFixed(2)}%`, 'success');
+
+                // 显示详细结果
+                let resultsHTML = '<div>';
+                results.details.forEach(detail => {
+                    const icon = detail.passed ? '✅' : '❌';
+                    const className = detail.passed ? 'passed' : 'failed';
+                    resultsHTML += `
+                        <div class="test-result ${className}">
+                            <div class="test-result-title">${icon} ${detail.name}</div>
+                            ${detail.message ? `<div class="test-result-message">${detail.message}</div>` : ''}
+                        </div>
+                    `;
+                });
+                resultsHTML += '</div>';
+                document.getElementById('unit-results').innerHTML = resultsHTML;
+
+                updateStats();
+            } catch (error) {
+                log(`❌ 测试执行失败: ${error.message}`, 'error');
+            }
+        }
+
+        // ============ 集成测试 ============
+        async function runIntegrationTests() {
+            log('🚀 开始运行集成测试...', 'info');
+
+            if (typeof JWTCollectorIntegrationTests === 'undefined') {
+                log('❌ JWTCollectorIntegrationTests未加载', 'error');
+                return;
+            }
+
+            try {
+                const passed = await JWTCollectorIntegrationTests.runAllIntegrationTests();
+                
+                log('', 'info');
+                log(passed ? '✅ 所有集成测试通过' : '❌ 部分集成测试失败', 
+                    passed ? 'success' : 'error');
+
+                testStats.total += 3;
+                testStats.passed += passed ? 3 : 0;
+                testStats.failed += passed ? 0 : 3;
+
+                updateStats();
+            } catch (error) {
+                log(`❌ 集成测试执行失败: ${error.message}`, 'error');
+            }
+        }
+
+        // ============ 手动测试 ============
+        async function testManualFlow() {
+            const loginUrl = document.getElementById('loginUrl').value;
+            const signInUrl = document.getElementById('signInUrl').value;
+            const credentialsStr = document.getElementById('credentials').value;
+            const tokenPath = document.getElementById('tokenPath').value;
+
+            if (!loginUrl || !signInUrl || !credentialsStr) {
+                log('❌ 请填写所有必需字段', 'error');
+                return;
+            }
+
+            try {
+                const credentials = JSON.parse(credentialsStr);
+                log(`📝 开始手动测试流程`, 'info');
+                log(`  登陆URL: ${loginUrl}`, 'debug');
+                log(`  签到URL: ${signInUrl}`, 'debug');
+                log(`  Token路径: ${tokenPath}`, 'debug');
+
+                if (typeof JWTCollectorSkill === 'undefined') {
+                    log('❌ JWTCollectorSkill未加载', 'error');
+                    return;
+                }
+
+                const skill = new JWTCollectorSkill({
+                    storage: 'localStorage',
+                    debug: true
+                });
+
+                const result = await skill.loginAndSignIn(loginUrl, signInUrl, credentials, {
+                    tokenPath: tokenPath
+                });
+
+                if (result.success) {
+                    log(`✅ 流程执行成功`, 'success');
+                    log(`  Token: ${result.token.substring(0, 30)}...`, 'debug');
+                } else {
+                    log(`❌ 流程执行失败: ${result.message}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ 错误: ${error.message}`, 'error');
+            }
+        }
+
+        async function testCollectOnly() {
+            const credentialsStr = document.getElementById('credentials').value;
+            const tokenPath = document.getElementById('tokenPath').value;
+
+            try {
+                const credentials = JSON.parse(credentialsStr);
+                log(`📝 仅收集JWT测试`, 'info');
+
+                if (typeof JWTCollectorSkill === 'undefined') {
+                    log('❌ JWTCollectorSkill未加载', 'error');
+                    return;
+                }
+
+                const skill = new JWTCollectorSkill({ storage: 'localStorage' });
+
+                // 模拟响应
+                const mockResponse = {
+                    data: {
+                        token: 'test.jwt.token.example'
+                    }
+                };
+
+                const result = await skill.collectAndStoreJWT(mockResponse, {
+                    tokenPath: tokenPath
+                });
+
+                if (result.success) {
+                    log(`✅ JWT收集成功`, 'success');
+                    log(`  Token: ${result.token.substring(0, 30)}...`, 'debug');
+                } else {
+                    log(`❌ JWT收集失败: ${result.message}`, 'error');
+                }
+            } catch (error) {
+                log(`❌ 错误: ${error.message}`, 'error');
+            }
+        }
+
+        function clearStoredToken() {
+            try {
+                if (typeof JWTCollectorSkill === 'undefined') {
+                    log('❌ JWTCollectorSkill未加载', 'error');
+                    return;
+                }
+
+                const skill = new JWTCollectorSkill({ storage: 'localStorage' });
+                skill.clearJWT();
+                log(`✅ Token已清除`, 'success');
+            } catch (error) {
+                log(`❌ 清除失败: ${error.message}`, 'error');
+            }
+        }
+
+        // 页面加载时的初始化
+        window.addEventListener('load', () => {
+            log('🎯 测试面板已加载，准备就绪', 'info');
+            log('💡 提示: 请确保已加载jwt-collector-skill.js和jwt-collector-skill.test.js', 'warning');
+        });
+    </script>
+
+    <!-- 加载JWT收集技能 -->
+    <script src="jwt-collector-skill.js"></script>
+    <script src="jwt-collector-skill.test.js"></script>
+</body>
+</html>
