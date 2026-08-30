@@ -1,0 +1,59 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Test Panel - Termux Demo</title>
+  <style>body{font-family:sans-serif;padding:16px;} button{margin:6px}</style>
+</head>
+<body>
+  <h2>Test Panel (Android WebView + Termux)</h2>
+  <div>
+    <button id="btn-health">Check Termux Health</button>
+    <button id="btn-tts">Play TTS (termux-tts-speak)</button>
+    <button id="btn-kv-set">Set Background (kv)</button>
+    <button id="btn-kv-get">Get Background (kv)</button>
+  </div>
+  <pre id="log" style="background:#f5f5f5;padding:10px;height:240px;overflow:auto;"></pre>
+
+  <script>
+    window.__nativeBridgeCallbacks = {};
+    window.__nativeBridgeCallback = function(cbId, resultStr) {
+      try {
+        const cb = window.__nativeBridgeCallbacks[cbId];
+        if (cb) { cb(JSON.parse(resultStr)); delete window.__nativeBridgeCallbacks[cbId]; }
+      } catch(e){ console.error(e); }
+    };
+
+    function callNative(action, payload) {
+      return new Promise((resolve,reject)=>{
+        const id = 'cb_'+Date.now()+'_'+Math.random().toString(36).slice(2);
+        window.__nativeBridgeCallbacks[id] = (res) => { if (res.ok) resolve(res); else reject(res); };
+        try {
+          if (action==='exec') window.AndroidBridge.exec(payload.cmd, JSON.stringify(payload.args||[]), id);
+          else if (action==='kvSet') window.AndroidBridge.kvSet(payload.key, JSON.stringify(payload.value||{}), id);
+          else if (action==='kvGet') window.AndroidBridge.kvGet(payload.key, id);
+          else reject({ ok:false, error:'unknown action' });
+        } catch(e){ delete window.__nativeBridgeCallbacks[id]; reject({ ok:false, error:e.message }); }
+      });
+    }
+
+    function log(msg){ const p=document.getElementById('log'); p.textContent += '\n'+msg; p.scrollTop=p.scrollHeight; }
+
+    document.getElementById('btn-health').addEventListener('click', ()=>{
+      callNative('exec', { cmd:'termux-toast', args:['Health check from app'] }).then(r=>log('health: '+JSON.stringify(r))).catch(e=>log('err: '+JSON.stringify(e)));
+    });
+
+    document.getElementById('btn-tts').addEventListener('click', ()=>{
+      callNative('exec', { cmd:'termux-tts-speak', args:['Hello from app via Termux TTS'] }).then(r=>log('tts: '+JSON.stringify(r))).catch(e=>log('err: '+JSON.stringify(e)));
+    });
+
+    document.getElementById('btn-kv-set').addEventListener('click', ()=>{
+      callNative('kvSet', { key:'background', value:{ url:'https://placekitten.com/800/400' } }).then(r=>log('kv set: '+JSON.stringify(r))).catch(e=>log('err: '+JSON.stringify(e)));
+    });
+
+    document.getElementById('btn-kv-get').addEventListener('click', ()=>{
+      callNative('kvGet', { key:'background' }).then(r=>log('kv get: '+JSON.stringify(r))).catch(e=>log('err: '+JSON.stringify(e)));
+    });
+  </script>
+</body>
+</html>
