@@ -33,7 +33,7 @@ class JWTCollectorSkillTests {
   /**
    * 测试1: JWT收集 - 基本功能
    */
-  testCollectBasicJWT() {
+  async testCollectBasicJWT() {
     console.log('\n📋 测试1: JWT收集 - 基本功能');
     
     const skill = new JWTCollectorSkill({ storage: 'memory', debug: true });
@@ -41,7 +41,8 @@ class JWTCollectorSkillTests {
       token: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'
     };
 
-    const result = skill.collectAndStoreJWT(mockResponse);
+    // ⚠️ 修复: collectAndStoreJWT 是 async，必须 await
+    const result = await skill.collectAndStoreJWT(mockResponse);
     
     this.assert(result.success, '收集JWT - 基本响应', '应该成功收集JWT');
     this.assert(result.token === mockResponse.token, '收集JWT - Token值正确', 'Token值应该匹配');
@@ -51,7 +52,7 @@ class JWTCollectorSkillTests {
   /**
    * 测试2: JWT收集 - 嵌套路径
    */
-  testCollectNestedJWT() {
+  async testCollectNestedJWT() {
     console.log('\n📋 测试2: JWT收集 - 嵌套路径');
     
     const skill = new JWTCollectorSkill({ storage: 'memory' });
@@ -61,7 +62,8 @@ class JWTCollectorSkillTests {
       }
     };
 
-    const result = skill.collectAndStoreJWT(mockResponse, {
+    // ⚠️ 修复: 缺 await
+    const result = await skill.collectAndStoreJWT(mockResponse, {
       tokenPath: 'data.accessToken'
     });
 
@@ -94,16 +96,18 @@ class JWTCollectorSkillTests {
   /**
    * 测试4: Token过期检查
    */
-  testTokenExpiration() {
+  async testTokenExpiration() {
     console.log('\n📋 测试4: Token过期检查');
     
-    const skill = new JWTCollectorSkill({ storage: 'memory' });
+    // ⚠️ 修复: expiresIn=1秒 < refreshBuffer默认300秒，刚收集就会判定"即将过期"
+    // 因此把 refreshBuffer 调小到 0，使"刚收集应有效"的断言成立
+    const skill = new JWTCollectorSkill({ storage: 'memory', refreshBuffer: 0 });
     const mockResponse = {
       token: 'expiring.token'
     };
 
     // 收集会在1秒后过期的Token
-    skill.collectAndStoreJWT(mockResponse, {
+    await skill.collectAndStoreJWT(mockResponse, {
       expiresIn: 1
     });
 
@@ -123,7 +127,7 @@ class JWTCollectorSkillTests {
   /**
    * 测试5: 存储切换 - 自动降级
    */
-  testStorageFallback() {
+  async testStorageFallback() {
     console.log('\n📋 测试5: 存储切换 - 自动降级');
     
     const skill = new JWTCollectorSkill({ 
@@ -135,7 +139,8 @@ class JWTCollectorSkillTests {
       token: 'fallback.test.token'
     };
 
-    const result = skill.collectAndStoreJWT(mockResponse);
+    // ⚠️ 修复: 缺 await
+    const result = await skill.collectAndStoreJWT(mockResponse);
     
     // 检查是否自动降级或使用了可用存储
     this.assert(result.success, '自动降级 - 收集成功', '即使localStorage不可用也应该成功');
@@ -248,16 +253,15 @@ class JWTCollectorSkillTests {
     console.log('🚀 开始运行JWT收集技能测试套件\n');
     console.log('=' .repeat(50));
 
-    this.testCollectBasicJWT();
+    await this.testCollectBasicJWT();
     await this.testCollectNestedJWT();
     this.testTokenValidity();
     await this.testTokenExpiration();
-    this.testStorageFallback();
+    await this.testStorageFallback();
     this.testAuthHeaderGeneration();
     this.testRequestConfiguration();
     this.testClearJWT();
     this.testTokenInfoParsing();
-
     console.log('\n' + '='.repeat(50));
     console.log(`\n📊 测试结果总结:`);
     console.log(`✅ 通过: ${this.passedTests}`);

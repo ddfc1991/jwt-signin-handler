@@ -13,7 +13,7 @@ class JWTCollectorSkill {
 
     // Token配置
     this.expiresIn = config.expiresIn || 0;
-    this.refreshBuffer = config.refreshBuffer || 300; // 5分钟缓冲
+    this.refreshBuffer = config.refreshBuffer ?? 300; // 5分钟缓冲
     this.tokenData = null;
 
     // 请求配置
