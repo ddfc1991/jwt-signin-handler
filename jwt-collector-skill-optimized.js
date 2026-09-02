@@ -1,11 +1,17 @@
-/**
- * JWT收集技能优化版 - 沙箱友好版本
- * 专门针对严格沙箱环境（如OpenMini等限制环境）优化
- * 支持无权限API调用、支持Worker线程、内置音频引擎支持
+/*
+ * jwt-collector-skill-optimized.js
+ * Integrated PlatformAdapter support, worker pending map, safer fetchWithTimeout and IndexedDB init fix
  */
+
+// Try to load PlatformAdapter if present
+let PlatformAdapter;
+try { PlatformAdapter = require('./src/platform-adapter.js'); } catch(e) { PlatformAdapter = null; }
 
 class JWTCollectorSkillOptimized {
   constructor(config = {}) {
+    // platform adapter (injected or created)
+    this.platformAdapter = config.platformAdapter || (PlatformAdapter ? new PlatformAdapter(config.platformAdapterOptions || {}) : null);
+
     // ============ 存储配置 ============
     this.storage = config.storage || 'auto'; // auto模式自动检测
     this.storageKey = config.storageKey || 'app_jwt_token';
@@ -46,6 +52,7 @@ class JWTCollectorSkillOptimized {
     this._currentStorage = this.storage;
     this._storageType = null; // 实际使用的存储类型
     this._worker = null;
+    this._workerPending = new Map(); // pending map for worker requests
     this._isInitialized = false;
     this._db = null; // IndexedDB连接
     this._metrics = {
@@ -56,20 +63,18 @@ class JWTCollectorSkillOptimized {
     };
 
     // 初始化
+    // don't await here to avoid blocking constructor; user can await initialize() if needed
     this.initialize();
   }
 
-  /**
-   * 初始化
-   */
   async initialize() {
     try {
       // 检测存储方式
       this._storageType = await this.detectStorageType();
       this.log(`✅ 存储类型: ${this._storageType}`, 'info');
 
-      // 初始化IndexedDB（如果可用）
-      if (this.useIndexedDB && this._storageType !== 'indexeddb') {
+      // 如果环境支持IndexedDB并且user选择使用IndexedDB，初始化它
+      if (this.useIndexedDB && this._storageType === 'indexeddb') {
         await this.initIndexedDB();
       }
 
@@ -90,22 +95,24 @@ class JWTCollectorSkillOptimized {
     }
   }
 
-  /**
-   * 自动检测最佳存储方式
-   */
   async detectStorageType() {
     // 优先级: IndexedDB > localStorage > sessionStorage > memory
-    
-    // 检测IndexedDB
+    // try IndexedDB by attempting to open a short-lived DB
     try {
       if (typeof indexedDB !== 'undefined') {
-        const db = indexedDB.open('jwt_storage');
-        db.onerror = () => {};
-        return 'indexeddb';
+        const ok = await new Promise((resolve) => {
+          let timed = false;
+          const timer = setTimeout(() => { timed = true; resolve(false); }, 2000);
+          try {
+            const req = indexedDB.open('jwt_storage_detect', 1);
+            req.onerror = () => { if (!timed) { clearTimeout(timer); resolve(false); } };
+            req.onsuccess = () => { if (!timed) { clearTimeout(timer); try { req.result.close(); } catch(e){} resolve(true); } };
+            req.onupgradeneeded = () => { /* upgraded, still OK */ };
+          } catch (e) { clearTimeout(timer); resolve(false); }
+        });
+        if (ok) return 'indexeddb';
       }
-    } catch (e) {
-      this.log('⚠️  IndexedDB不可用', 'debug');
-    }
+    } catch (e) { this.log('⚠️  IndexedDB检测异常', 'debug'); }
 
     // 检测localStorage
     try {
@@ -133,30 +140,14 @@ class JWTCollectorSkillOptimized {
     return 'memory';
   }
 
-  /**
-   * 初始化IndexedDB
-   */
   async initIndexedDB() {
     return new Promise((resolve, reject) => {
       try {
         const request = indexedDB.open('jwt_storage', 1);
 
-        request.onerror = () => {
+        request.onerror = (e) => {
           this.log('❌ IndexedDB打开失败', 'warn');
-          reject(request.error);
-        };
-
-        request.onsuccess = () => {
-          this._db = request.result;
-          
-          // 创建对象存储
-          if (!this._db.objectStoreNames.contains('tokens')) {
-            const objectStore = this._db.createObjectStore('tokens', { keyPath: 'key' });
-            objectStore.createIndex('expireAt', 'expireAt', { unique: false });
-          }
-
-          this.log('✅ IndexedDB已初始化', 'debug');
-          resolve();
+          reject(e.target ? e.target.error : e);
         };
 
         request.onupgradeneeded = (event) => {
@@ -166,6 +157,12 @@ class JWTCollectorSkillOptimized {
             objectStore.createIndex('expireAt', 'expireAt', { unique: false });
           }
         };
+
+        request.onsuccess = (event) => {
+          this._db = event.target.result;
+          this.log('✅ IndexedDB已初始化', 'debug');
+          resolve();
+        };
       } catch (error) {
         this.log(`❌ IndexedDB初始化失败: ${error.message}`, 'warn');
         reject(error);
@@ -173,32 +170,32 @@ class JWTCollectorSkillOptimized {
     });
   }
 
-  /**
-   * 初始化Web Worker
-   */
   initWorker() {
     try {
-      // 创建内联Worker（避免跨域问题）
       const workerCode = `
         self.onmessage = function(e) {
-          const { action, payload } = e.data;
-          
+          const { id, action, payload } = e.data || {};
+          if (!id) return;
           if (action === 'parse-token') {
             try {
               const parts = payload.split('.');
               if (parts.length === 3) {
-                const decoded = JSON.parse(atob(parts[1]));
-                self.postMessage({ success: true, data: decoded });
+                // safe base64 decode
+                const b64 = parts[1].replace(/-/g,'+').replace(/_/g,'/');
+                const decoded = JSON.parse(decodeURIComponent(escape(atob(b64))));
+                self.postMessage({ id, success: true, data: decoded });
+              } else {
+                self.postMessage({ id, success: false, error: 'invalid jwt' });
               }
             } catch (error) {
-              self.postMessage({ success: false, error: error.message });
+              self.postMessage({ id, success: false, error: error.message });
             }
           }
-          
           if (action === 'compress') {
-            // 简单的压缩实现
-            const compressed = btoa(JSON.stringify(payload));
-            self.postMessage({ success: true, data: compressed });
+            try {
+              const compressed = btoa(JSON.stringify(payload));
+              self.postMessage({ id, success: true, data: compressed });
+            } catch(e) { self.postMessage({ id, success:false, error: e.message }); }
           }
         };
       `;
@@ -206,7 +203,18 @@ class JWTCollectorSkillOptimized {
       const blob = new Blob([workerCode], { type: 'application/javascript' });
       const workerUrl = URL.createObjectURL(blob);
       this._worker = new Worker(workerUrl);
-      
+
+      // central message dispatcher
+      this._worker.addEventListener('message', (e) => {
+        const data = e.data || {};
+        const { id, success, data: d, error } = data;
+        if (id && this._workerPending.has(id)) {
+          const { resolve, reject } = this._workerPending.get(id);
+          this._workerPending.delete(id);
+          if (success) resolve(d); else reject(new Error(error || 'worker error'));
+        }
+      });
+
       this.log('✅ Web Worker已初始化', 'debug');
     } catch (error) {
       this.log(`⚠️  Worker初始化失败: ${error.message}`, 'warn');
@@ -214,12 +222,8 @@ class JWTCollectorSkillOptimized {
     }
   }
 
-  /**
-   * 初始化音频引擎
-   */
   async initAudioEngine() {
     try {
-      // 创建音频上下文
       const AudioContext = window.AudioContext || window.webkitAudioContext;
       if (!AudioContext) {
         this.log('⚠️  浏览器不支持Web Audio API', 'warn');
@@ -229,44 +233,22 @@ class JWTCollectorSkillOptimized {
       this.audioEngine = {
         context: new AudioContext(),
         isPlaying: false,
-        
-        /**
-         * 播放提示音
-         */
         playTone: (frequency = 800, duration = 200) => {
           if (!this.audioEngine.isPlaying) {
             const osc = this.audioEngine.context.createOscillator();
             const gain = this.audioEngine.context.createGain();
-            
-            osc.connect(gain);
-            gain.connect(this.audioEngine.context.destination);
-            
+            osc.connect(gain); gain.connect(this.audioEngine.context.destination);
             osc.frequency.value = frequency;
             gain.gain.setValueAtTime(0.3, this.audioEngine.context.currentTime);
             gain.gain.exponentialRampToValueAtTime(0.01, this.audioEngine.context.currentTime + duration / 1000);
-            
             osc.start(this.audioEngine.context.currentTime);
             osc.stop(this.audioEngine.context.currentTime + duration / 1000);
-            
             this.audioEngine.isPlaying = true;
             setTimeout(() => { this.audioEngine.isPlaying = false; }, duration);
           }
         },
-
-        /**
-         * 播放成功声音
-         */
-        playSuccess: () => {
-          this.audioEngine.playTone(800, 100);
-          setTimeout(() => this.audioEngine.playTone(1000, 100), 150);
-        },
-
-        /**
-         * 播放错误声音
-         */
-        playError: () => {
-          this.audioEngine.playTone(400, 200);
-        }
+        playSuccess: () => { this.audioEngine.playTone(800,100); setTimeout(()=>this.audioEngine.playTone(1000,100),150); },
+        playError: () => { this.audioEngine.playTone(400,200); }
       };
 
       this.log('✅ 音频引擎已初始化', 'debug');
@@ -276,259 +258,148 @@ class JWTCollectorSkillOptimized {
     }
   }
 
-  /**
-   * 日志输出
-   */
   log(message, level = 'info') {
     const levels = { debug: 0, info: 1, warn: 2, error: 3 };
     const currentLevel = levels[this.logLevel] || 1;
-    
     if (levels[level] >= currentLevel) {
       const timestamp = new Date().toLocaleTimeString();
-      const prefix = `[${timestamp}]`;
-      
       if (this.debug) {
-        console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log'](
-          `${prefix} ${message}`
-        );
+        if (level === 'error') console.error(`[${timestamp}] ${message}`); else if (level === 'warn') console.warn(`[${timestamp}] ${message}`); else console.log(`[${timestamp}] ${message}`);
       }
     }
   }
 
-  /**
-   * 保存到存储（支持多种方式）
-   */
   async saveToStorage(key, data) {
-    // 1. 内存缓存（总是保存）
-    this.tokenCache.set(key, {
-      data,
-      timestamp: Date.now()
-    });
+    // always keep memory cache
+    this.tokenCache.set(key, { data, timestamp: Date.now() });
 
-    // 2. IndexedDB
+    // platform adapter storage
+    if (this.platformAdapter && this.platformAdapter.kvSet) {
+      try { await this.platformAdapter.kvSet(key, data); this.log('💾 数据已保存到 platformAdapter','debug'); return; } catch(e) { this.log('⚠️ platformAdapter save failed','warn'); }
+    }
+
+    // IndexedDB
     if (this._storageType === 'indexeddb' && this._db) {
       try {
         const transaction = this._db.transaction(['tokens'], 'readwrite');
         const objectStore = transaction.objectStore('tokens');
-        objectStore.put({
-          key,
-          data,
-          expireAt: data.expiresAt
-        });
+        objectStore.put({ key, data, expireAt: data.expiresAt });
         this.log('💾 数据已保存到IndexedDB', 'debug');
         return;
-      } catch (error) {
-        this.log(`⚠️  IndexedDB保存失败: ${error.message}`, 'warn');
-      }
+      } catch (error) { this.log(`⚠️ IndexedDB保存失败: ${error.message}`, 'warn'); }
     }
 
-    // 3. localStorage/sessionStorage
+    // local/session
     if (this._storageType === 'localStorage' || this._storageType === 'sessionStorage') {
       try {
         const storage = this._storageType === 'localStorage' ? localStorage : sessionStorage;
         storage.setItem(key, JSON.stringify(data));
         this.log(`💾 数据已保存到${this._storageType}`, 'debug');
         return;
-      } catch (error) {
-        this.log(`⚠️  ${this._storageType}保存失败: ${error.message}`, 'warn');
-      }
+      } catch (error) { this.log(`⚠️ ${this._storageType}保存失败: ${error.message}`, 'warn'); }
     }
 
     this.log('💾 数据已保存到内存', 'debug');
   }
 
-  /**
-   * 从存储读取
-   */
   async readFromStorage(key) {
-    // 1. 先检查内存缓存
+    // memory cache
     if (this.tokenCache.has(key)) {
       this._metrics.cacheHits++;
-      const cached = this.tokenCache.get(key);
       this.log('🎯 缓存命中', 'debug');
-      return cached.data;
+      return this.tokenCache.get(key).data;
     }
-
     this._metrics.cacheMisses++;
 
-    // 2. 检查IndexedDB
+    // platform adapter
+    if (this.platformAdapter && this.platformAdapter.kvGet) {
+      try {
+        const res = await this.platformAdapter.kvGet(key);
+        // adapter may return { ok, data } or data directly
+        const data = res && res.data ? res.data : res;
+        if (data) { this.tokenCache.set(key, { data, timestamp: Date.now() }); return data; }
+      } catch(e) { this.log('⚠️ platformAdapter read failed','warn'); }
+    }
+
+    // indexeddb
     if (this._storageType === 'indexeddb' && this._db) {
       try {
         return await new Promise((resolve) => {
           const transaction = this._db.transaction(['tokens'], 'readonly');
           const objectStore = transaction.objectStore('tokens');
           const request = objectStore.get(key);
-
-          request.onsuccess = () => {
-            if (request.result) {
-              this.tokenCache.set(key, { data: request.result.data, timestamp: Date.now() });
-              resolve(request.result.data);
-            } else {
-              resolve(null);
-            }
-          };
-
+          request.onsuccess = () => { if (request.result) { this.tokenCache.set(key, { data: request.result.data, timestamp: Date.now() }); resolve(request.result.data); } else resolve(null); };
           request.onerror = () => resolve(null);
         });
-      } catch (error) {
-        this.log(`⚠️  IndexedDB读取失败: ${error.message}`, 'warn');
-      }
+      } catch (error) { this.log(`⚠️ IndexedDB读取失败: ${error.message}`, 'warn'); }
     }
 
-    // 3. 检查localStorage/sessionStorage
+    // local/session
     if (this._storageType === 'localStorage' || this._storageType === 'sessionStorage') {
       try {
         const storage = this._storageType === 'localStorage' ? localStorage : sessionStorage;
         const data = storage.getItem(key);
-        if (data) {
-          const parsed = JSON.parse(data);
-          this.tokenCache.set(key, { data: parsed, timestamp: Date.now() });
-          return parsed;
-        }
-      } catch (error) {
-        this.log(`⚠️  ${this._storageType}读取失败: ${error.message}`, 'warn');
-      }
+        if (data) { const parsed = JSON.parse(data); this.tokenCache.set(key, { data: parsed, timestamp: Date.now() }); return parsed; }
+      } catch (error) { this.log(`⚠️ ${this._storageType}读取失败: ${error.message}`, 'warn'); }
     }
 
     return null;
   }
 
-  /**
-   * 收集JWT（优化版）
-   */
   async collectAndStoreJWT(response, options = {}) {
     try {
       this.log('📥 开始收集JWT', 'info');
-
-      // 获取Token
       let token = this.extractToken(response, options.tokenPath);
+      if (!token) return { success:false, token:null, expiresAt:null, message:'JWT未找到' };
+      if (!this.isValidJWT(token)) this.log('⚠️ Token格式可能不正确','warn');
 
-      if (!token) {
-        return {
-          success: false,
-          token: null,
-          expiresAt: null,
-          message: 'JWT未找到'
-        };
-      }
-
-      // 基本验证
-      if (!this.isValidJWT(token)) {
-        this.log('⚠️  Token格式可能不正确', 'warn');
-      }
-
-      // 计算过期时间
       const expiresIn = options.expiresIn || this.expiresIn;
       const expiresAt = expiresIn > 0 ? Date.now() + expiresIn * 1000 : null;
+      this.tokenData = { token, expiresAt, collectedAt: Date.now(), storageKey: options.storageKey || this.storageKey };
 
-      this.tokenData = {
-        token,
-        expiresAt,
-        collectedAt: Date.now(),
-        storageKey: options.storageKey || this.storageKey
-      };
-
-      // 保存到存储
       await this.saveToStorage(options.storageKey || this.storageKey, this.tokenData);
-
-      // 播放成功音
-      if (this.audioEngine) {
-        this.audioEngine.playSuccess();
-      }
-
-      this.log('✅ JWT收集成功', 'info');
-
-      return {
-        success: true,
-        token,
-        expiresAt,
-        message: '✅ JWT收集成功'
-      };
-
+      if (this.audioEngine) this.audioEngine.playSuccess();
+      this.log('✅ JWT收集成功','info');
+      return { success:true, token, expiresAt, message:'✅ JWT收集成功' };
     } catch (error) {
-      this.log(`❌ JWT收集失败: ${error.message}`, 'error');
-      if (this.audioEngine) {
-        this.audioEngine.playError();
-      }
-      return {
-        success: false,
-        token: null,
-        expiresAt: null,
-        message: `JWT收集失败: ${error.message}`
-      };
+      this.log(`❌ JWT收集失败: ${error.message}`,'error');
+      if (this.audioEngine) this.audioEngine.playError();
+      return { success:false, token:null, expiresAt:null, message:`JWT收集失败: ${error.message}` };
     }
   }
 
-  /**
-   * 提取Token（支持多种格式）
-   */
   extractToken(response, tokenPath) {
-    if (tokenPath) {
-      return this.getNestedValue(response, tokenPath);
-    }
-
-    // 尝试常见的Token字段
-    return response.token || 
-           response.accessToken || 
-           response.access_token || 
-           response.data?.token || 
-           response.data?.accessToken ||
-           response.Authorization ||
-           response.authorization;
+    if (tokenPath) return this.getNestedValue(response, tokenPath);
+    return response && (response.token || response.accessToken || response.access_token || response.data?.token || response.data?.accessToken || response.Authorization || response.authorization) || null;
   }
 
-  /**
-   * 嵌套路径获取
-   */
-  getNestedValue(obj, path) {
-    if (!path) return obj;
-    return path.split('.').reduce((current, prop) => current?.[prop], obj);
-  }
+  getNestedValue(obj, path) { if (!path) return obj; return path.split('.').reduce((current, prop) => current?.[prop], obj); }
+  isValidJWT(token) { if (typeof token !== 'string') return false; const parts = token.split('.'); return parts.length === 3; }
 
-  /**
-   * JWT格式验证
-   */
-  isValidJWT(token) {
-    if (typeof token !== 'string') return false;
-    const parts = token.split('.');
-    return parts.length === 3;
-  }
-
-  /**
-   * 使用Worker解析Token（后台处理）
-   */
   async parseTokenAsync(token = null) {
-    const jwt = token || await this.getStoredJWT();
-    if (!jwt || !this._worker) return null;
-
-    return new Promise((resolve) => {
-      this._worker.onmessage = (e) => {
-        resolve(e.data.success ? e.data.data : null);
-      };
-      this._worker.postMessage({
-        action: 'parse-token',
-        payload: jwt
-      });
+    const jwt = token || await this.getStoredJWT(); if (!jwt || !this._worker) return null;
+    const id = `req_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    return new Promise((resolve, reject) => {
+      this._workerPending.set(id, { resolve, reject });
+      try { this._worker.postMessage({ id, action: 'parse-token', payload: jwt }); } catch(e) { this._workerPending.delete(id); return reject(e); }
+      // timeout
+      setTimeout(()=>{ if (this._workerPending.has(id)) { this._workerPending.delete(id); reject(new Error('worker timeout')); } }, 5000);
     });
   }
 
-  /**
-   * 带超时的Fetch请求（沙箱友好）
-   */
   async fetchWithTimeout(url, options = {}) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), this.requestTimeout);
 
-    try {
-      const response = await fetch(url, {
-        ...options,
-        signal: controller.signal,
-        // 沙箱友好的CORS设置
-        mode: 'no-cors',
-        credentials: 'omit'
-      });
+    const mode = options.mode || this.corsMode || 'cors';
+    const credentials = options.credentials || this.credentials || 'include';
 
+    try {
+      const finalUrl = (this.platformAdapter && this.platformAdapter.httpBase && !url.startsWith('http')) ? (this.platformAdapter.httpBase.replace(/\/$/, '') + '/' + url.replace(/^\//,'') ) : url;
+
+      const response = await fetch(finalUrl, Object.assign({}, options, { signal: controller.signal, mode, credentials }));
       clearTimeout(timeoutId);
+      if (response.type === 'opaque') return { opaque:true, ok: response.ok, status: response.status || 0 };
       return response;
     } catch (error) {
       clearTimeout(timeoutId);
@@ -536,9 +407,6 @@ class JWTCollectorSkillOptimized {
     }
   }
 
-  /**
-   * 批量请求处理（性能优化）
-   */
   async queueRequest(url, options = {}) {
     return new Promise((resolve, reject) => {
       this.requestQueue.push({ url, options, resolve, reject });
@@ -546,207 +414,91 @@ class JWTCollectorSkillOptimized {
     });
   }
 
-  /**
-   * 处理请求队列
-   */
   async processQueue() {
     if (this.isProcessingQueue || this.requestQueue.length === 0) return;
-
     this.isProcessingQueue = true;
-
     try {
       while (this.requestQueue.length > 0) {
         const { url, options, resolve, reject } = this.requestQueue.shift();
-        
         try {
-          const start = performance.now();
+          const start = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
           const response = await this.fetchWithTimeout(url, options);
-          const end = performance.now();
-
-          // 更新性能指标
+          const end = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
           this._metrics.requestCount++;
           this._metrics.avgResponseTime = (this._metrics.avgResponseTime + (end - start)) / 2;
-
           resolve(response);
-        } catch (error) {
-          reject(error);
-        }
+        } catch (error) { reject(error); }
       }
-    } finally {
-      this.isProcessingQueue = false;
-    }
+    } finally { this.isProcessingQueue = false; }
   }
 
-  /**
-   * 自动签到（优化版）
-   */
   async autoSignIn(signInUrl, options = {}) {
     try {
-      this.log('🔐 开始自动签到', 'info');
+      this.log('🔐 开始自动签到','info');
+      const token = await this.getStoredJWT(); if (!token) return { success:false, data:null, message:'❌ 未找到JWT' };
+      if (!this.isTokenValid()) return { success:false, data:null, message:'❌ JWT已过期' };
 
-      const token = await this.getStoredJWT();
-      if (!token) {
-        return {
-          success: false,
-          data: null,
-          message: '❌ 未找到JWT'
-        };
-      }
-
-      if (!this.isTokenValid()) {
-        return {
-          success: false,
-          data: null,
-          message: '❌ JWT已过期'
-        };
-      }
-
-      const headers = {
-        'Content-Type': 'application/json',
-        [this.headerName]: `${this.headerPrefix} ${token}`,
-        ...options.headers
-      };
-
-      // 使用批量请求（如果启用）
+      const headers = Object.assign({ 'Content-Type':'application/json', [this.headerName]: `${this.headerPrefix} ${token}` }, options.headers || {});
       const fetchFn = this.batchRequests ? this.queueRequest.bind(this) : this.fetchWithTimeout.bind(this);
-      
-      const response = await fetchFn(signInUrl, {
-        method: options.method || 'POST',
-        headers,
-        body: JSON.stringify(options.body || {}),
-        mode: this.corsMode,
-        credentials: this.credentials
-      });
 
-      if (!response.ok) {
-        throw new Error(`签到失败 (${response.status})`);
+      const response = await fetchFn(signInUrl, { method: options.method || 'POST', headers, body: JSON.stringify(options.body || {}), mode: this.corsMode, credentials: this.credentials });
+
+      // support opaque response marker
+      if (response && response.opaque) {
+        // opaque: we cannot read body; infer success from ok flag
+        if (response.ok) { if (this.audioEngine) this.audioEngine.playSuccess(); return { success:true, data:null, message:'✅ 签到请求已发送 (opaque)'}; }
+        throw new Error(`签到失败 (opaque)`);
       }
 
+      if (!response.ok) throw new Error(`签到失败 (${response.status})`);
       const data = await response.json();
-
-      if (this.audioEngine) {
-        this.audioEngine.playSuccess();
-      }
-
-      this.log('✅ 签到成功', 'info');
-
-      return {
-        success: true,
-        data,
-        message: '✅ 签到成功'
-      };
-
+      if (this.audioEngine) this.audioEngine.playSuccess();
+      this.log('✅ 签到成功','info');
+      return { success:true, data, message:'✅ 签到成功' };
     } catch (error) {
-      this.log(`❌ 签到失败: ${error.message}`, 'error');
-      if (this.audioEngine) {
-        this.audioEngine.playError();
-      }
-      return {
-        success: false,
-        data: null,
-        message: `❌ 签到失败: ${error.message}`
-      };
+      this.log(`❌ 签到失败: ${error.message}`,'error'); if (this.audioEngine) this.audioEngine.playError(); return { success:false, data:null, message:`❌ 签到失败: ${error.message}` };
     }
   }
 
-  /**
-   * 获取存储的JWT
-   */
   async getStoredJWT(storageKey = null) {
     const key = storageKey || this.storageKey;
-    
-    if (this.tokenData?.token) {
-      return this.tokenData.token;
+    if (this.tokenData?.token) return this.tokenData.token;
+    // try platform adapter storage first (if implemented)
+    if (this.platformAdapter && this.platformAdapter.kvGet) {
+      try { const res = await this.platformAdapter.kvGet(key); const data = res && res.data ? res.data : res; if (data?.token) { this.tokenData = data; return data.token; } } catch(e) { this.log('⚠️ platformAdapter get failed','warn'); }
     }
-
     const data = await this.readFromStorage(key);
-    if (data?.token) {
-      this.tokenData = data;
-      return data.token;
-    }
-
+    if (data?.token) { this.tokenData = data; return data.token; }
     return null;
   }
 
-  /**
-   * 检查Token有效性
-   */
   isTokenValid(storageKey = null) {
-    const token = this.tokenData?.token;
-    if (!token) return false;
-
+    const token = this.tokenData?.token; if (!token) return false;
     if (this.tokenData?.expiresAt) {
-      const now = Date.now();
-      const timeUntilExpiry = this.tokenData.expiresAt - now;
-
-      if (timeUntilExpiry <= 0) return false;
-      if (timeUntilExpiry <= this.refreshBuffer * 1000) return false;
+      const now = Date.now(); const timeUntilExpiry = this.tokenData.expiresAt - now;
+      if (timeUntilExpiry <= 0) return false; if (timeUntilExpiry <= this.refreshBuffer * 1000) return false;
     }
-
     return true;
   }
 
-  /**
-   * 清除JWT
-   */
   async clearJWT(storageKey = null) {
     const key = storageKey || this.storageKey;
-
-    // 清除内存缓存
-    this.tokenCache.delete(key);
-    this.tokenData = null;
-
-    // 清除IndexedDB
+    this.tokenCache.delete(key); this.tokenData = null;
+    if (this.platformAdapter && this.platformAdapter.kvSet) {
+      try { await this.platformAdapter.kvSet(key, null); } catch(e){}
+    }
     if (this._storageType === 'indexeddb' && this._db) {
-      try {
-        const transaction = this._db.transaction(['tokens'], 'readwrite');
-        const objectStore = transaction.objectStore('tokens');
-        objectStore.delete(key);
-      } catch (error) {
-        this.log(`⚠️  IndexedDB清除失败: ${error.message}`, 'warn');
-      }
+      try { const transaction = this._db.transaction(['tokens'], 'readwrite'); const objectStore = transaction.objectStore('tokens'); objectStore.delete(key); } catch(e){ this.log('⚠️ IndexedDB清除失败','warn'); }
     }
-
-    // 清除localStorage/sessionStorage
     if (this._storageType === 'localStorage' || this._storageType === 'sessionStorage') {
-      try {
-        const storage = this._storageType === 'localStorage' ? localStorage : sessionStorage;
-        storage.removeItem(key);
-      } catch (error) {
-        this.log(`⚠️  ${this._storageType}清除失败: ${error.message}`, 'warn');
-      }
+      try { const storage = this._storageType === 'localStorage' ? localStorage : sessionStorage; storage.removeItem(key); } catch(e){ this.log(`⚠️ ${this._storageType}清除失败`,'warn'); }
     }
-
-    this.log('🗑️  Token已清除', 'info');
-    return true;
+    this.log('🗑️  Token已清除','info'); return true;
   }
 
-  /**
-   * 获取性能指标
-   */
-  getMetrics() {
-    return {
-      ...this._metrics,
-      cacheHitRate: this._metrics.cacheHits / (this._metrics.cacheHits + this._metrics.cacheMisses) || 0
-    };
-  }
+  getMetrics() { return { ...this._metrics, cacheHitRate: this._metrics.cacheHits / (this._metrics.cacheHits + this._metrics.cacheMisses) || 0 }; }
 
-  /**
-   * 销毁资源
-   */
-  destroy() {
-    if (this._worker) {
-      this._worker.terminate();
-    }
-    if (this._db) {
-      this._db.close();
-    }
-    this.tokenCache.clear();
-    this.log('🛑 资源已释放', 'info');
-  }
+  destroy() { if (this._worker) this._worker.terminate(); if (this._db) try { this._db.close(); } catch(e){} this.tokenCache.clear(); this.log('🛑 资源已释放','info'); }
 }
 
-// 导出
-if (typeof module !== 'undefined' && module.exports) {
-  module.exports = JWTCollectorSkillOptimized;
-}
+if (typeof module !== 'undefined' && module.exports) module.exports = JWTCollectorSkillOptimized;

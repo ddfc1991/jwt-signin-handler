@@ -1,0 +1,24 @@
+const fs = require('fs');
+const path = require('path');
+
+const KV_DIR = process.env.TERMUX_KV_DIR || './termux_kv';
+if (!fs.existsSync(KV_DIR)) fs.mkdirSync(KV_DIR, { recursive: true });
+
+const TOKENS_FILE = path.join(KV_DIR, 'tokens.json');
+const AUDIT_FILE = path.join(KV_DIR, 'audit.log');
+const ALLOWED_FILE = path.join(KV_DIR, 'allowed_cmds.json');
+
+function loadTokens() {
+  try { return JSON.parse(fs.readFileSync(TOKENS_FILE, 'utf8')); } catch(e) { return {}; }
+}
+function saveTokens(obj) { fs.writeFileSync(TOKENS_FILE, JSON.stringify(obj, null, 2)); }
+
+function appendAudit(entry) {
+  try { fs.appendFileSync(AUDIT_FILE, JSON.stringify(entry) + '\n'); } catch(e) { console.warn('audit write failed', e.message); }
+}
+
+function loadAllowed() {
+  try { return JSON.parse(fs.readFileSync(ALLOWED_FILE, 'utf8')); } catch(e) { return ['termux-tts-speak','termux-open','termux-toast']; }
+}
+
+module.exports = { KV_DIR, TOKENS_FILE, AUDIT_FILE, ALLOWED_FILE, loadTokens, saveTokens, appendAudit, loadAllowed };
